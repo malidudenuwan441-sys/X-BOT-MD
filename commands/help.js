@@ -10,19 +10,19 @@ async function menuCommand(sock, chatId, message) {
 🤖 *X BOT COMMAND MENU* 🤖
 ╚═══════════════════╝
 
-[1]  🌐 General Commands
-[2]  👮‍♂️ Admin Commands
-[3]  🔒 Owner Commands
-[4]  🎨 Image / Sticker Commands
-[5]  🖼️ Pies Commands
-[6]  🎮 Game Commands
-[7]  🤖 AI Commands
-[8]  🎯 Fun Commands
-[9]  🔤 Textmaker Commands
-[10] 📥 Downloader Commands
-[11] 🧩 MISC Commands
-[12] 🖼️ Anime Commands
-[13] 💻 Github Commands
+1️⃣  🌐 General Commands
+2️⃣  👮‍♂️ Admin Commands
+3️⃣  🔒 Owner Commands
+4️⃣  🎨 Image / Sticker Commands
+5️⃣  🖼️ Pies Commands
+6️⃣  🎮 Game Commands
+7️⃣  🤖 AI Commands
+8️⃣  🎯 Fun Commands
+9️⃣  🔤 Textmaker Commands
+1️⃣0️⃣ 📥 Downloader Commands
+1️⃣1️⃣ 🧩 MISC Commands
+1️⃣2️⃣ 🖼️ Anime Commands
+1️⃣3️⃣ 💻 Github Commands
 
 *Example:* Type *1* for General Commands
 
