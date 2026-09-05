@@ -100,7 +100,7 @@ async function handleYtVideoReply(sock, chatId, message) {
         const outputPath = path.join(tempDir, `yt_${Date.now()}.mp4`);
 
         // Deno JS Engine එක සහ Full Cookies Path එක සමඟ yt-dlp Command එක
-        const ytDlpCmd = `yt-dlp --js-runtimes deno --cookies /home/opc/X-BOT-MD/cookies.txt --extractor-args "youtube:player_client=android,web" -f "bv*[height<=${targetHeight}][ext=mp4]+ba[ext=m4a]/b[height<=${targetHeight}]" --merge-output-format mp4 -o "${outputPath}" "${downloadData.url}"`;
+        const ytDlpCmd = `yt-dlp --js-runtimes deno --extractor-args "youtube:player_client=mweb,ios,android" -f "bv*[height<=${targetHeight}][ext=mp4]+ba[ext=m4a]/b[height<=${targetHeight}]" --merge-output-format mp4 -o "${outputPath}" "${downloadData.url}"`;
 
         exec(ytDlpCmd, { timeout: 300000 }, async (error, stdout, stderr) => {
             if (error) {
