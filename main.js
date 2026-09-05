@@ -186,6 +186,10 @@ async function handleMessages(sock, messageUpdate, printLog) {
        // Handle FB Quality Choice Reply
         const isFbHandled = await handleFbReply(sock, chatId, message);
         if (isFbHandled) return; 
+
+       // Handle YouTube Quality Choice Reply (1, 2, 3)
+        const isYtHandled = await handleYtVideoReply(sock, chatId, message);
+        if (isYtHandled) return; 
         
         // Store message for antidelete feature
         if (message.message) {
