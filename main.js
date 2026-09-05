@@ -131,7 +131,7 @@ const { shayariCommand } = require('./commands/shayari');
 const { rosedayCommand } = require('./commands/roseday');
 const imagineCommand = require('./commands/imagine');
 // පැරණි: const videoCommand = require('./commands/video');
-const { videoCommand, handleYtVideoReply } = require('./commands/video');
+const videoCommand = require('./commands/video');
 const sudoCommand = require('./commands/sudo');
 const { miscCommand, handleHeart } = require('./commands/misc');
 const { animeCommand } = require('./commands/anime');
@@ -185,11 +185,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
         }
        // Handle FB Quality Choice Reply
         const isFbHandled = await handleFbReply(sock, chatId, message);
-        if (isFbHandled) return; 
-
-       // Handle YouTube Quality Choice Reply (1, 2, 3)
-        const isYtHandled = await handleYtVideoReply(sock, chatId, message);
-        if (isYtHandled) return; 
+        if (isFbHandled) return;   
         
         // Store message for antidelete feature
         if (message.message) {
