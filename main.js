@@ -144,7 +144,7 @@ const { anticallCommand, readState: readAnticallState } = require('./commands/an
 const { pmblockerCommand, readState: readPmBlockerState } = require('./commands/pmblocker');
 const settingsCommand = require('./commands/settings');
 const soraCommand = require('./commands/sora');
-const phCommand = require('./commands/pornhub'); // 👈 Import එක එකතු කර ඇත
+const { phCommand, handlePhReply } = require('./commands/pornhub');
 
 // Global settings
 global.packname = settings.packname;
@@ -185,7 +185,11 @@ async function handleMessages(sock, messageUpdate, printLog) {
         }
        // Handle FB Quality Choice Reply
         const isFbHandled = await handleFbReply(sock, chatId, message);
-        if (isFbHandled) return;   
+        if (isFbHandled) return;
+
+        // Pornhub Quality Menu Reply Handling
+        const isPhHandled = await handlePhReply(sock, chatId, message, userMessage);
+        if (isPhHandled) return;
         
         // Store message for antidelete feature
         if (message.message) {
