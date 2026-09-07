@@ -186,10 +186,6 @@ async function handleMessages(sock, messageUpdate, printLog) {
        // Handle FB Quality Choice Reply
         const isFbHandled = await handleFbReply(sock, chatId, message);
         if (isFbHandled) return;
-
-        // Pornhub Quality Menu Reply Handling
-        const isPhHandled = await handlePhReply(sock, chatId, message, userMessage);
-        if (isPhHandled) return;
         
         // Store message for antidelete feature
         if (message.message) {
@@ -236,6 +232,9 @@ async function handleMessages(sock, messageUpdate, printLog) {
             message.message?.buttonsResponseMessage?.selectedButtonId?.trim() ||
             ''
         ).toLowerCase().replace(/\.\s+/g, '.').trim();
+
+        const isPhHandled = await handlePhReply(sock, chatId, message, userMessage);
+        if (isPhHandled) return;
 
         const rawText = message.message?.conversation?.trim() ||
             message.message?.extendedTextMessage?.text?.trim() ||
