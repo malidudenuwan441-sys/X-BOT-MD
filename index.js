@@ -158,9 +158,10 @@ async function startXeonBotInc() {
                 return msg?.message || ""
             },
             msgRetryCounterCache,
-            defaultQueryTimeoutMs: 60000,
-            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 120000,
+            connectTimeoutMs: 120000,
             keepAliveIntervalMs: 10000,
+            mediaUploadTimeoutMs: 600000, // 10 minutes timeout for large video uploads
         })
 
         // Save credentials when they update

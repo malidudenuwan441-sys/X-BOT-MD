@@ -1246,6 +1246,10 @@ function startDashboardServer(onPairRequest) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'Cookies content cannot be empty.' }));
           }
+          if (!content.includes('youtube.com') || !content.includes('\t')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Invalid cookie format! Must be in Netscape format (tab-separated lines from .youtube.com). Use "Get cookies.txt LOCALLY" extension.' }));
+          }
           const cookiesPath = path.join(__dirname, 'cookies.txt');
           fs.writeFileSync(cookiesPath, content, 'utf8');
           log('success', 'YouTube cookies.txt saved successfully (' + content.length + ' bytes)');

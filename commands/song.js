@@ -13,19 +13,31 @@ const AXIOS_DEFAULTS = {
 	}
 };
 
+// Helper to check if cookies.txt is valid Netscape format
+function isValidCookieFile(filePath) {
+    if (!fs.existsSync(filePath)) return false;
+    try {
+        const stats = fs.statSync(filePath);
+        if (stats.size < 50) return false;
+        const content = fs.readFileSync(filePath, 'utf8', { flag: 'r' });
+        return content.includes('youtube.com') && content.includes('\t');
+    } catch (e) {
+        return false;
+    }
+}
+
 // Download high quality audio using yt-dlp with cookies.txt
 async function downloadAudioViaYtDlp(youtubeUrl) {
     const cookiesPath = path.resolve(__dirname, '../cookies.txt');
-    if (!fs.existsSync(cookiesPath)) {
-        throw new Error('No cookies.txt found');
-    }
+    const hasValidCookies = isValidCookieFile(cookiesPath);
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const outTemplate = `/tmp/ytsong_${id}.%(ext)s`;
 
-    const cmd = `/usr/local/bin/yt-dlp --cookies "${cookiesPath}" --js-runtimes node:/usr/local/bin/node --remote-components ejs:github --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
+    const cookieArg = hasValidCookies ? `--cookies "${cookiesPath}"` : '';
+    const cmd = `/usr/local/bin/yt-dlp ${cookieArg} --js-runtimes node:/usr/local/bin/node --remote-components ejs:github --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
 
     return new Promise((resolve, reject) => {
-        exec(cmd, { timeout: 300000 }, (error, stdout, stderr) => {
+        exec(cmd, { timeout: 600000 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(new Error(stderr || error.message));
             }
@@ -129,37 +141,49 @@ async function songCommand(sock, chatId, message) {
             caption: `🎵 Downloading: *${video.title}*\n⏱ Duration: ${video.timestamp}`
         }, { quoted: message });
 
-        // 1. Try yt-dlp with cookies if available (handles full length mixes, long tracks)
-        const cookiesPath = path.resolve(__dirname, '../cookies.txt');
-        if (fs.existsSync(cookiesPath)) {
-            try {
-                console.log('[SONG] cookies.txt detected. Attempting audio download with yt-dlp...');
-                const ytdlpSong = await downloadAudioViaYtDlp(video.url);
-                if (ytdlpSong && ytdlpSong.filePath) {
-                    const localBuffer = fs.readFileSync(ytdlpSong.filePath);
-                    try { fs.unlinkSync(ytdlpSong.filePath); } catch (e) {}
+        // 1. Try yt-dlp first (handles full length mixes, long tracks)
+        try {
+            console.log('[SONG] Attempting audio download with yt-dlp...');
+            const ytdlpSong = await downloadAudioViaYtDlp(video.url);
+            if (ytdlpSong && ytdlpSong.filePath) {
+                const filePath = ytdlpSong.filePath;
+                try {
+                    const fileSizeMb = Math.round((ytdlpSong.sizeBytes || 0) / (1024 * 1024));
                     const safeTitle = (video.title || 'song').replace(/[^\w\s-]/g, '').trim() || 'song';
-                    await sock.sendMessage(chatId, {
-                        audio: localBuffer,
-                        mimetype: 'audio/mpeg',
-                        fileName: `${safeTitle}.mp3`,
-                        contextInfo: {
-                            externalAdReply: {
-                                title: video.title,
-                                body: video.author?.name || 'X-Bot Music',
-                                thumbnailUrl: video.thumbnail,
-                                mediaType: 2,
-                                mediaUrl: video.url,
-                                sourceUrl: video.url
+                    
+                    if (fileSizeMb > 50) {
+                        // Send as document for large DJ mixes/podcasts
+                        await sock.sendMessage(chatId, {
+                            document: { url: filePath },
+                            mimetype: 'audio/mpeg',
+                            fileName: `${safeTitle}.mp3`,
+                            caption: `🎵 *${video.title || 'Audio'}*\n📦 Size: *${fileSizeMb} MB*\n\n> *_Downloaded by X-Bot_*`
+                        }, { quoted: message });
+                    } else {
+                        await sock.sendMessage(chatId, {
+                            audio: { url: filePath },
+                            mimetype: 'audio/mpeg',
+                            fileName: `${safeTitle}.mp3`,
+                            contextInfo: {
+                                externalAdReply: {
+                                    title: video.title,
+                                    body: video.author?.name || 'X-Bot Music',
+                                    thumbnailUrl: video.thumbnail,
+                                    mediaType: 2,
+                                    mediaUrl: video.url,
+                                    sourceUrl: video.url
+                                }
                             }
-                        }
-                    }, { quoted: message });
-                    console.log('[SONG] Successfully downloaded and sent song via yt-dlp!');
+                        }, { quoted: message });
+                    }
+                    console.log(`[SONG] Successfully sent audio (${fileSizeMb} MB) via yt-dlp!`);
                     return;
+                } finally {
+                    try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) {}
                 }
-            } catch (ytAudioErr) {
-                console.warn('[SONG] yt-dlp audio download failed, falling back to web APIs:', ytAudioErr.message);
             }
+        } catch (ytAudioErr) {
+            console.warn('[SONG] yt-dlp audio download failed, falling back to web APIs:', ytAudioErr.message);
         }
 
 		// 2. Try multiple APIs with fallback chain: EliteProTech -> Yupra -> Okatsu
