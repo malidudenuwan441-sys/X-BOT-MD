@@ -13,6 +13,12 @@ const AXIOS_DEFAULTS = {
 	}
 };
 
+// Ensure temp directory exists in workspace
+const workspaceTemp = path.join(process.cwd(), 'temp');
+if (!fs.existsSync(workspaceTemp)) {
+    try { fs.mkdirSync(workspaceTemp, { recursive: true }); } catch (e) {}
+}
+
 // Helper to check if cookies.txt is valid Netscape format
 function isValidCookieFile(filePath) {
     if (!fs.existsSync(filePath)) return false;
@@ -31,7 +37,7 @@ async function downloadAudioViaYtDlp(youtubeUrl) {
     const cookiesPath = path.resolve(__dirname, '../cookies.txt');
     const hasValidCookies = isValidCookieFile(cookiesPath);
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const outTemplate = `/tmp/ytsong_${id}.%(ext)s`;
+    const outTemplate = path.join(workspaceTemp, `ytsong_${id}.%(ext)s`);
 
     const cookieArg = hasValidCookies ? `--cookies "${cookiesPath}"` : '';
     const cmd = `/usr/local/bin/yt-dlp ${cookieArg} --js-runtimes node:/usr/local/bin/node --remote-components ejs:github --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
@@ -42,11 +48,11 @@ async function downloadAudioViaYtDlp(youtubeUrl) {
                 return reject(new Error(stderr || error.message));
             }
             try {
-                const files = fs.readdirSync('/tmp').filter(f => f.startsWith(`ytsong_${id}`));
+                const files = fs.readdirSync(workspaceTemp).filter(f => f.startsWith(`ytsong_${id}`));
                 if (files.length === 0) {
                     return reject(new Error('Audio file was not created by yt-dlp'));
                 }
-                const localFilePath = path.join('/tmp', files[0]);
+                const localFilePath = path.join(workspaceTemp, files[0]);
                 const stats = fs.statSync(localFilePath);
                 resolve({
                     isLocal: true,
@@ -158,7 +164,7 @@ async function songCommand(sock, chatId, message) {
                             mimetype: 'audio/mpeg',
                             fileName: `${safeTitle}.mp3`,
                             caption: `🎵 *${video.title || 'Audio'}*\n📦 Size: *${fileSizeMb} MB*\n\n> *_Downloaded by X-Bot_*`
-                        }, { quoted: message });
+                        }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                     } else {
                         await sock.sendMessage(chatId, {
                             audio: { url: filePath },
@@ -174,7 +180,7 @@ async function songCommand(sock, chatId, message) {
                                     sourceUrl: video.url
                                 }
                             }
-                        }, { quoted: message });
+                        }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                     }
                     console.log(`[SONG] Successfully sent audio (${fileSizeMb} MB) via yt-dlp!`);
                     return;
@@ -362,7 +368,7 @@ async function songCommand(sock, chatId, message) {
 			mimetype: finalMimetype,
 			fileName: `${(audioData.title || video.title || 'song').replace(/[^\w\s-]/g, '')}.${finalExtension}`,
 			ptt: false
-		}, { quoted: message });
+		}, { quoted: message, mediaUploadTimeoutMs: 1800000 });
 
 		// Cleanup: Delete temp files created during conversion
 		try {

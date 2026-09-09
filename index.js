@@ -161,7 +161,7 @@ async function startXeonBotInc() {
             defaultQueryTimeoutMs: 120000,
             connectTimeoutMs: 120000,
             keepAliveIntervalMs: 10000,
-            mediaUploadTimeoutMs: 600000, // 10 minutes timeout for large video uploads
+            mediaUploadTimeoutMs: 1800000, // 30 minutes timeout for large video uploads
         })
 
         // Save credentials when they update

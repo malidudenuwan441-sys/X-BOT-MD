@@ -12,6 +12,12 @@ const AXIOS_DEFAULTS = {
     }
 };
 
+// Ensure temp directory exists in workspace
+const workspaceTemp = path.join(process.cwd(), 'temp');
+if (!fs.existsSync(workspaceTemp)) {
+    try { fs.mkdirSync(workspaceTemp, { recursive: true }); } catch (e) {}
+}
+
 // Helper to check if cookies.txt is valid Netscape format
 function isValidCookieFile(filePath) {
     if (!fs.existsSync(filePath)) return false;
@@ -31,24 +37,24 @@ async function downloadViaYtDlp(youtubeUrl) {
     const hasValidCookies = isValidCookieFile(cookiesPath);
     
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const outTemplate = `/tmp/ytdl_${id}.%(ext)s`;
+    const outTemplate = path.join(workspaceTemp, `ytdl_${id}.%(ext)s`);
 
-    // Adaptive format selection: up to 720p or 480p with audio, keeping filesize manageable for WhatsApp
-    const formatSpec = "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=480]+ba/b[height<=480]/bestvideo+bestaudio/best";
+    // Adaptive format selection: prefer 480p/360p for long videos/movies to keep file size reasonable for WhatsApp
+    const formatSpec = "bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]/bv*[height<=720]+ba/b[height<=720]/bestvideo+bestaudio/best";
     const cookieArg = hasValidCookies ? `--cookies "${cookiesPath}"` : '';
     const cmd = `/usr/local/bin/yt-dlp ${cookieArg} --js-runtimes node:/usr/local/bin/node --remote-components ejs:github --no-playlist -f "${formatSpec}" --merge-output-format mp4 -o "${outTemplate}" "${youtubeUrl}"`;
 
     return new Promise((resolve, reject) => {
-        exec(cmd, { timeout: 600000 }, (error, stdout, stderr) => {
+        exec(cmd, { timeout: 900000 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(new Error(stderr || error.message));
             }
             try {
-                const files = fs.readdirSync('/tmp').filter(f => f.startsWith(`ytdl_${id}`));
+                const files = fs.readdirSync(workspaceTemp).filter(f => f.startsWith(`ytdl_${id}`));
                 if (files.length === 0) {
                     return reject(new Error('Downloaded file was not created by yt-dlp'));
                 }
-                const localFilePath = path.join('/tmp', files[0]);
+                const localFilePath = path.join(workspaceTemp, files[0]);
                 const stats = fs.statSync(localFilePath);
                 resolve({
                     isLocal: true,
@@ -64,13 +70,13 @@ async function downloadViaYtDlp(youtubeUrl) {
 }
 
 // Helper to download remote stream to local file to verify size and stream cleanly to Baileys
-async function downloadRemoteUrlToDisk(url, destPath, maxBytes = 400 * 1024 * 1024) {
+async function downloadRemoteUrlToDisk(url, destPath, maxBytes = 1500 * 1024 * 1024) {
     const writer = fs.createWriteStream(destPath);
     const response = await axios({
         method: 'get',
         url: url,
         responseType: 'stream',
-        timeout: 300000,
+        timeout: 600000,
         headers: AXIOS_DEFAULTS.headers,
         maxRedirects: 5
     });
@@ -81,7 +87,7 @@ async function downloadRemoteUrlToDisk(url, destPath, maxBytes = 400 * 1024 * 10
             if (downloaded > maxBytes) {
                 response.data.destroy();
                 writer.destroy();
-                reject(new Error('File exceeds maximum allowable size (400MB)'));
+                reject(new Error('File exceeds maximum allowable size (1.5GB)'));
             }
         });
         response.data.pipe(writer);
@@ -214,15 +220,16 @@ async function videoCommand(sock, chatId, message) {
                     `📦 Size: *${fileSizeMb} MB*\n` +
                     `\n> *_Downloaded by X-Bot_*`;
 
-                // Stream directly from disk via { url: filePath } without loading into Node RAM!
-                if (fileSizeMb > 60) {
-                    console.log(`[VIDEO] Video is ${fileSizeMb} MB (>60MB). Sending as WhatsApp Document...`);
+                // Stream directly from disk via { url: filePath }
+                // Videos > 40MB must be sent as document to prevent WhatsApp server payload rejection
+                if (fileSizeMb > 40) {
+                    console.log(`[VIDEO] Video is ${fileSizeMb} MB (>40MB). Sending as WhatsApp Document...`);
                     await sock.sendMessage(chatId, {
                         document: { url: filePath },
                         mimetype: 'video/mp4',
                         fileName: `${safeTitle}.mp4`,
                         caption: captionText
-                    }, { quoted: message });
+                    }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                 } else {
                     try {
                         await sock.sendMessage(chatId, {
@@ -230,7 +237,7 @@ async function videoCommand(sock, chatId, message) {
                             mimetype: 'video/mp4',
                             fileName: `${safeTitle}.mp4`,
                             caption: captionText
-                        }, { quoted: message });
+                        }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                     } catch (sendErr) {
                         console.log('[VIDEO] Direct video send failed, falling back to document:', sendErr.message);
                         await sock.sendMessage(chatId, {
@@ -238,7 +245,7 @@ async function videoCommand(sock, chatId, message) {
                             mimetype: 'video/mp4',
                             fileName: `${safeTitle}.mp4`,
                             caption: captionText
-                        }, { quoted: message });
+                        }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                     }
                 }
                 console.log(`[VIDEO] Successfully sent video (${fileSizeMb} MB) via yt-dlp!`);
@@ -287,7 +294,7 @@ async function videoCommand(sock, chatId, message) {
 
         const rawDownloadUrl = videoData.download || videoData.dl || videoData.url;
         const fallbackTitle = (videoData.title || videoTitle || safeTitle || 'video').replace(/[^\w\s-]/g, '').trim() || 'video';
-        const tempFallbackPath = path.join('/tmp', `webdl_${Date.now()}.mp4`);
+        const tempFallbackPath = path.join(workspaceTemp, `webdl_${Date.now()}.mp4`);
 
         try {
             console.log('[VIDEO] Downloading stream from web API to disk...');
@@ -299,13 +306,15 @@ async function videoCommand(sock, chatId, message) {
                 `\n> *_Downloaded by X-Bot_*`;
 
             // Stream directly from disk to WhatsApp
-            if (fileSizeMb > 60) {
+            // Videos > 40MB are sent as WhatsApp document (up to 2GB supported)
+            if (fileSizeMb > 40) {
+                console.log(`[VIDEO] Video is ${fileSizeMb} MB (>40MB). Sending as WhatsApp Document...`);
                 await sock.sendMessage(chatId, {
                     document: { url: tempFallbackPath },
                     mimetype: 'video/mp4',
                     fileName: `${fallbackTitle}.mp4`,
                     caption: captionText
-                }, { quoted: message });
+                }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
             } else {
                 try {
                     await sock.sendMessage(chatId, {
@@ -313,7 +322,7 @@ async function videoCommand(sock, chatId, message) {
                         mimetype: 'video/mp4',
                         fileName: `${fallbackTitle}.mp4`,
                         caption: captionText
-                    }, { quoted: message });
+                    }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                 } catch (sendVideoErr) {
                     console.log('[VIDEO] Direct video send failed, falling back to document:', sendVideoErr.message);
                     await sock.sendMessage(chatId, {
@@ -321,7 +330,7 @@ async function videoCommand(sock, chatId, message) {
                         mimetype: 'video/mp4',
                         fileName: `${fallbackTitle}.mp4`,
                         caption: captionText
-                    }, { quoted: message });
+                    }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                 }
             }
         } finally {
