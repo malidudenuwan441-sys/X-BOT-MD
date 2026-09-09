@@ -1,0 +1,6 @@
+{
+  "name": "X-BOT-MD",
+  "description": "WhatsApp Multi-Device Bot with web management dashboard, pairing code generator, and command browser",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

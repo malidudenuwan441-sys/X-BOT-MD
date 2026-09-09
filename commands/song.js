@@ -2,6 +2,7 @@ const axios = require('axios');
 const yts = require('yt-search');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 const { toAudio } = require('../lib/converter');
 
 const AXIOS_DEFAULTS = {
@@ -11,6 +12,41 @@ const AXIOS_DEFAULTS = {
 		'Accept': 'application/json, text/plain, */*'
 	}
 };
+
+// Download high quality audio using yt-dlp with cookies.txt
+async function downloadAudioViaYtDlp(youtubeUrl) {
+    const cookiesPath = path.resolve(__dirname, '../cookies.txt');
+    if (!fs.existsSync(cookiesPath)) {
+        throw new Error('No cookies.txt found');
+    }
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const outTemplate = `/tmp/ytsong_${id}.%(ext)s`;
+
+    const cmd = `/usr/local/bin/yt-dlp --cookies "${cookiesPath}" --js-runtimes node:/usr/local/bin/node --remote-components ejs:github --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
+
+    return new Promise((resolve, reject) => {
+        exec(cmd, { timeout: 300000 }, (error, stdout, stderr) => {
+            if (error) {
+                return reject(new Error(stderr || error.message));
+            }
+            try {
+                const files = fs.readdirSync('/tmp').filter(f => f.startsWith(`ytsong_${id}`));
+                if (files.length === 0) {
+                    return reject(new Error('Audio file was not created by yt-dlp'));
+                }
+                const localFilePath = path.join('/tmp', files[0]);
+                const stats = fs.statSync(localFilePath);
+                resolve({
+                    isLocal: true,
+                    filePath: localFilePath,
+                    sizeBytes: stats.size
+                });
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
 
 async function tryRequest(getter, attempts = 3) {
 	let lastError;
@@ -93,7 +129,40 @@ async function songCommand(sock, chatId, message) {
             caption: `🎵 Downloading: *${video.title}*\n⏱ Duration: ${video.timestamp}`
         }, { quoted: message });
 
-		// Try multiple APIs with fallback chain: EliteProTech -> Yupra -> Okatsu
+        // 1. Try yt-dlp with cookies if available (handles full length mixes, long tracks)
+        const cookiesPath = path.resolve(__dirname, '../cookies.txt');
+        if (fs.existsSync(cookiesPath)) {
+            try {
+                console.log('[SONG] cookies.txt detected. Attempting audio download with yt-dlp...');
+                const ytdlpSong = await downloadAudioViaYtDlp(video.url);
+                if (ytdlpSong && ytdlpSong.filePath) {
+                    const localBuffer = fs.readFileSync(ytdlpSong.filePath);
+                    try { fs.unlinkSync(ytdlpSong.filePath); } catch (e) {}
+                    const safeTitle = (video.title || 'song').replace(/[^\w\s-]/g, '').trim() || 'song';
+                    await sock.sendMessage(chatId, {
+                        audio: localBuffer,
+                        mimetype: 'audio/mpeg',
+                        fileName: `${safeTitle}.mp3`,
+                        contextInfo: {
+                            externalAdReply: {
+                                title: video.title,
+                                body: video.author?.name || 'X-Bot Music',
+                                thumbnailUrl: video.thumbnail,
+                                mediaType: 2,
+                                mediaUrl: video.url,
+                                sourceUrl: video.url
+                            }
+                        }
+                    }, { quoted: message });
+                    console.log('[SONG] Successfully downloaded and sent song via yt-dlp!');
+                    return;
+                }
+            } catch (ytAudioErr) {
+                console.warn('[SONG] yt-dlp audio download failed, falling back to web APIs:', ytAudioErr.message);
+            }
+        }
+
+		// 2. Try multiple APIs with fallback chain: EliteProTech -> Yupra -> Okatsu
 		let audioData;
 		let audioBuffer;
 		let downloadSuccess = false;

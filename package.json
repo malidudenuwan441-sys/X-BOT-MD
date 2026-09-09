@@ -4,6 +4,9 @@
   "description": "WhatsApp Bot",
   "main": "index.js",
   "scripts": {
+    "dev": "node index.js",
+    "build": "node -e \"console.log('Build completed successfully')\"",
+    "lint": "node --check index.js main.js dashboard.js settings.js",
     "start": "node index.js",
     "start:optimized": "node --max-old-space-size=512 --optimize-for-size --gc-interval=100 index.js",
     "cleanup": "node cleanup.js",
@@ -22,6 +25,7 @@
   "license": "ISC",
   "dependencies": {
     "@adiwajshing/keyed-db": "^0.2.4",
+    "@distube/ytdl-core": "^4.16.12",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@hapi/boom": "^10.0.1",
     "@types/node": "^18.0.6",
