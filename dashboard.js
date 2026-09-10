@@ -1272,7 +1272,9 @@ function startDashboardServer(onPairRequest) {
       }
       log('info', 'Testing YouTube cookies using yt-dlp...');
       const testUrl = 'https://www.youtube.com/watch?v=kJQP7kiw5Fk';
-      const cmd = `/usr/local/bin/yt-dlp --cookies "${cookiesPath}" --js-runtimes node:/usr/local/bin/node --remote-components ejs:github -g --no-playlist "${testUrl}"`;
+      const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+      const nodeBin = process.execPath || 'node';
+      const cmd = `${ytdlpBin} --cookies "${cookiesPath}" --js-runtimes "node:${nodeBin}" --remote-components ejs:github -g --no-playlist "${testUrl}"`;
       exec(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
         if (err) {
           const errOutput = stderr || err.message || '';

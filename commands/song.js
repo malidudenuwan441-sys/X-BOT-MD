@@ -32,15 +32,51 @@ function isValidCookieFile(filePath) {
     }
 }
 
+const net = require('net');
+
+let ipv6Available = null;
+let lastIpv6Check = 0;
+
+async function checkIPv6() {
+    if (ipv6Available !== null && Date.now() - lastIpv6Check < 600000) {
+        return ipv6Available;
+    }
+    return new Promise((resolve) => {
+        const sock = net.createConnection({ host: '2001:4860:4860::8888', port: 53, timeout: 1500 });
+        sock.on('connect', () => {
+            sock.destroy();
+            ipv6Available = true;
+            lastIpv6Check = Date.now();
+            resolve(true);
+        });
+        const onFail = () => {
+            sock.destroy();
+            ipv6Available = false;
+            lastIpv6Check = Date.now();
+            resolve(false);
+        };
+        sock.on('error', onFail);
+        sock.on('timeout', onFail);
+    });
+}
+
 // Download high quality audio using yt-dlp with cookies.txt
 async function downloadAudioViaYtDlp(youtubeUrl) {
     const cookiesPath = path.resolve(__dirname, '../cookies.txt');
     const hasValidCookies = isValidCookieFile(cookiesPath);
+    console.log(`[SONG] yt-dlp checking cookies at ${cookiesPath}: ${hasValidCookies ? 'VALID' : 'NOT FOUND/EMPTY'}`);
+
+    const useIPv6 = await checkIPv6();
+    console.log(`[SONG] yt-dlp network routing: ${useIPv6 ? 'IPv6 ENABLED (-6)' : 'IPv4 (standard)'}`);
+    const ipv6Arg = useIPv6 ? '-6' : '';
+
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const outTemplate = path.join(workspaceTemp, `ytsong_${id}.%(ext)s`);
+    const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+    const nodeBin = process.execPath || 'node';
 
     const cookieArg = hasValidCookies ? `--cookies "${cookiesPath}"` : '';
-    const cmd = `/usr/local/bin/yt-dlp ${cookieArg} --js-runtimes node:/usr/local/bin/node --remote-components ejs:github --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
+    const cmd = `${ytdlpBin} ${ipv6Arg} ${cookieArg} --js-runtimes "node:${nodeBin}" --remote-components ejs:github --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
 
     return new Promise((resolve, reject) => {
         exec(cmd, { timeout: 600000 }, (error, stdout, stderr) => {
