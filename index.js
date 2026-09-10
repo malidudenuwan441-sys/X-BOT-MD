@@ -10,6 +10,12 @@
  * - Pair Code implementation inspired by TechGod143 & DGXEON
  */
 require('./settings')
+const dns = require('dns')
+try {
+    if (typeof dns.setDefaultResultOrder === 'function') {
+        dns.setDefaultResultOrder('ipv4first')
+    }
+} catch (e) {}
 const { Boom } = require('@hapi/boom')
 const fs = require('fs')
 const chalk = require('chalk')

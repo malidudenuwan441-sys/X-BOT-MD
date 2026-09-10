@@ -67,7 +67,6 @@ async function downloadViaYtDlp(youtubeUrl) {
 
     const useIPv6 = await checkIPv6();
     console.log(`[VIDEO] yt-dlp network routing: ${useIPv6 ? 'IPv6 ENABLED (-6)' : 'IPv4 (standard)'}`);
-    const ipv6Arg = useIPv6 ? '-6' : '';
     
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const outTemplate = path.join(workspaceTemp, `ytdl_${id}.%(ext)s`);
@@ -77,117 +76,54 @@ async function downloadViaYtDlp(youtubeUrl) {
     // Adaptive format selection: prefer 480p/360p for long videos/movies to keep file size reasonable for WhatsApp
     const formatSpec = "bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]/bv*[height<=720]+ba/b[height<=720]/bestvideo+bestaudio/best";
     const cookieArg = hasValidCookies ? `--cookies "${cookiesPath}"` : '';
-    const cmd = `${ytdlpBin} ${ipv6Arg} ${cookieArg} --js-runtimes "node:${nodeBin}" --remote-components ejs:github --no-playlist -f "${formatSpec}" --merge-output-format mp4 -o "${outTemplate}" "${youtubeUrl}"`;
 
-    return new Promise((resolve, reject) => {
-        exec(cmd, { timeout: 900000 }, (error, stdout, stderr) => {
-            if (error) {
-                return reject(new Error(stderr || error.message));
-            }
-            try {
-                const files = fs.readdirSync(workspaceTemp).filter(f => f.startsWith(`ytdl_${id}`));
-                if (files.length === 0) {
-                    return reject(new Error('Downloaded file was not created by yt-dlp'));
+    const executeDownload = (cmd) => {
+        return new Promise((resolve, reject) => {
+            console.log(`[VIDEO] Executing: ${cmd}`);
+            exec(cmd, { timeout: 900000 }, (error, stdout, stderr) => {
+                if (error) {
+                    return reject(new Error(stderr || stdout || error.message));
                 }
-                const localFilePath = path.join(workspaceTemp, files[0]);
-                const stats = fs.statSync(localFilePath);
-                resolve({
-                    isLocal: true,
-                    filePath: localFilePath,
-                    sizeBytes: stats.size,
-                    title: 'YouTube Video'
-                });
-            } catch (e) {
-                reject(e);
-            }
+                try {
+                    const files = fs.readdirSync(workspaceTemp).filter(f => f.startsWith(`ytdl_${id}`));
+                    if (files.length === 0) {
+                        return reject(new Error('Downloaded file was not created by yt-dlp'));
+                    }
+                    const localFilePath = path.join(workspaceTemp, files[0]);
+                    const stats = fs.statSync(localFilePath);
+                    resolve({
+                        isLocal: true,
+                        filePath: localFilePath,
+                        sizeBytes: stats.size,
+                        title: 'YouTube Video'
+                    });
+                } catch (e) {
+                    reject(e);
+                }
+            });
         });
-    });
-}
+    };
 
-// Helper to download remote stream to local file to verify size and stream cleanly to Baileys
-async function downloadRemoteUrlToDisk(url, destPath, maxBytes = 1500 * 1024 * 1024) {
-    const writer = fs.createWriteStream(destPath);
-    const response = await axios({
-        method: 'get',
-        url: url,
-        responseType: 'stream',
-        timeout: 600000,
-        headers: AXIOS_DEFAULTS.headers,
-        maxRedirects: 5
-    });
-    return new Promise((resolve, reject) => {
-        let downloaded = 0;
-        response.data.on('data', chunk => {
-            downloaded += chunk.length;
-            if (downloaded > maxBytes) {
-                response.data.destroy();
-                writer.destroy();
-                reject(new Error('File exceeds maximum allowable size (1.5GB)'));
-            }
-        });
-        response.data.pipe(writer);
-        writer.on('finish', () => resolve({ filePath: destPath, sizeBytes: downloaded }));
-        writer.on('error', reject);
-        response.data.on('error', reject);
-    });
-}
+    // Primary command: with IPv6 and runtime options
+    const ipv6Flag = useIPv6 ? '-6' : '';
+    const primaryCmd = `${ytdlpBin} ${ipv6Flag} ${cookieArg} --js-runtimes "node:${nodeBin}" --no-playlist -f "${formatSpec}" --merge-output-format mp4 -o "${outTemplate}" "${youtubeUrl}"`;
 
-async function tryRequest(getter, attempts = 3) {
-    let lastError;
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-        try {
-            return await getter();
-        } catch (err) {
-            lastError = err;
-            if (attempt < attempts) {
-                await new Promise(r => setTimeout(r, 1000 * attempt));
-            }
-        }
+    try {
+        return await executeDownload(primaryCmd);
+    } catch (primaryErr) {
+        console.warn('[VIDEO] Primary yt-dlp attempt failed:', primaryErr.message);
+        
+        // Fallback command: standard IPv4 without extra flags
+        const fallbackCmd = `${ytdlpBin} ${cookieArg} --no-playlist -f "${formatSpec}" --merge-output-format mp4 -o "${outTemplate}" "${youtubeUrl}"`;
+        console.log('[VIDEO] Retrying yt-dlp with standard fallback configuration...');
+        return await executeDownload(fallbackCmd);
     }
-    throw lastError;
-}
-
-// EliteProTech API - Primary
-async function getEliteProTechVideoByUrl(youtubeUrl) {
-    const apiUrl = `https://eliteprotech-apis.zone.id/ytdown?url=${encodeURIComponent(youtubeUrl)}&format=mp4`;
-    const res = await tryRequest(() => axios.get(apiUrl, AXIOS_DEFAULTS));
-    if (res?.data?.success && res?.data?.downloadURL) {
-        return {
-            download: res.data.downloadURL,
-            title: res.data.title
-        };
-    }
-    throw new Error('EliteProTech ytdown returned no download');
-}
-
-async function getYupraVideoByUrl(youtubeUrl) {
-    const apiUrl = `https://api.yupra.my.id/api/downloader/ytmp4?url=${encodeURIComponent(youtubeUrl)}`;
-    const res = await tryRequest(() => axios.get(apiUrl, AXIOS_DEFAULTS));
-    if (res?.data?.success && res?.data?.data?.download_url) {
-        return {
-            download: res.data.data.download_url,
-            title: res.data.data.title,
-            thumbnail: res.data.data.thumbnail
-        };
-    }
-    throw new Error('Yupra returned no download');
-}
-
-async function getOkatsuVideoByUrl(youtubeUrl) {
-    const apiUrl = `https://okatsu-rolezapiiz.vercel.app/downloader/ytmp4?url=${encodeURIComponent(youtubeUrl)}`;
-    const res = await tryRequest(() => axios.get(apiUrl, AXIOS_DEFAULTS));
-    // shape: { status, creator, url, result: { status, title, mp4 } }
-    if (res?.data?.result?.mp4) {
-        return { download: res.data.result.mp4, title: res.data.result.title };
-    }
-    throw new Error('Okatsu ytmp4 returned no mp4');
 }
 
 async function videoCommand(sock, chatId, message) {
     try {
         const text = message.message?.conversation || message.message?.extendedTextMessage?.text;
         const searchQuery = text.split(' ').slice(1).join(' ').trim();
-        
         
         if (!searchQuery) {
             await sock.sendMessage(chatId, { text: 'What video do you want to download?' }, { quoted: message });
@@ -220,11 +156,10 @@ async function videoCommand(sock, chatId, message) {
             if (thumb) {
                 await sock.sendMessage(chatId, {
                     image: { url: thumb },
-                    caption: `*${captionTitle}*\nDownloading...`
+                    caption: `*${captionTitle}*\nDownloading via yt-dlp...`
                 }, { quoted: message });
             }
         } catch (e) { console.error('[VIDEO] thumb error:', e?.message || e); }
-        
 
         // Validate YouTube URL
         let urls = videoUrl.match(/(?:https?:\/\/)?(?:youtu\.be\/|(?:www\.|m\.)?youtube\.com\/(?:watch\?v=|v\/|embed\/|shorts\/|playlist\?list=)?)([a-zA-Z0-9_-]{11})/gi);
@@ -233,161 +168,72 @@ async function videoCommand(sock, chatId, message) {
             return;
         }
 
-        const cookiesPath = path.resolve(__dirname, '../cookies.txt');
-        const hasCookies = isValidCookieFile(cookiesPath);
         const safeTitle = (videoTitle || searchQuery || 'video').replace(/[^\w\s-]/g, '').trim() || 'video';
 
-        // 1. Try yt-dlp first (always attempt yt-dlp with or without cookies as it supports long videos)
-        let localDownloadResult = null;
-        try {
-            console.log('[VIDEO] Attempting download with yt-dlp...');
-            localDownloadResult = await downloadViaYtDlp(videoUrl);
-        } catch (ytdlpErr) {
-            console.warn('[VIDEO] yt-dlp failed, falling back to web APIs:', ytdlpErr.message);
-            localDownloadResult = null;
+        // Pure yt-dlp execution
+        console.log('[VIDEO] Attempting download strictly with yt-dlp...');
+        const localDownloadResult = await downloadViaYtDlp(videoUrl);
+
+        if (!localDownloadResult || !localDownloadResult.filePath) {
+            throw new Error('yt-dlp could not produce a downloadable file.');
         }
 
-        if (localDownloadResult && localDownloadResult.filePath) {
-            const filePath = localDownloadResult.filePath;
-            try {
-                const fileSizeMb = Math.round((localDownloadResult.sizeBytes || 0) / (1024 * 1024));
-                const captionText = `🎬 *${videoTitle || 'YouTube Video'}*\n` +
-                    `📦 Size: *${fileSizeMb} MB*\n` +
-                    `\n> *_Downloaded by X-Bot_*`;
+        const filePath = localDownloadResult.filePath;
+        try {
+            const fileSizeMb = Math.round((localDownloadResult.sizeBytes || 0) / (1024 * 1024));
+            const captionText = `🎬 *${videoTitle || 'YouTube Video'}*\n` +
+                `📦 Size: *${fileSizeMb} MB*\n` +
+                `\n> *_Downloaded by X-Bot_*`;
 
-                // Stream directly from disk via { url: filePath }
-                // Videos > 40MB must be sent as document to prevent WhatsApp server payload rejection
-                if (fileSizeMb > 40) {
-                    console.log(`[VIDEO] Video is ${fileSizeMb} MB (>40MB). Sending as WhatsApp Document...`);
+            // Stream directly from disk via { url: filePath }
+            // Videos > 40MB must be sent as document to prevent WhatsApp server payload rejection
+            if (fileSizeMb > 40) {
+                console.log(`[VIDEO] Video is ${fileSizeMb} MB (>40MB). Sending as WhatsApp Document...`);
+                await sock.sendMessage(chatId, {
+                    document: { url: filePath },
+                    mimetype: 'video/mp4',
+                    fileName: `${safeTitle}.mp4`,
+                    caption: captionText
+                }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
+            } else {
+                try {
+                    await sock.sendMessage(chatId, {
+                        video: { url: filePath },
+                        mimetype: 'video/mp4',
+                        fileName: `${safeTitle}.mp4`,
+                        caption: captionText
+                    }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
+                } catch (sendErr) {
+                    console.log('[VIDEO] Direct video send failed, sending as document:', sendErr.message);
                     await sock.sendMessage(chatId, {
                         document: { url: filePath },
                         mimetype: 'video/mp4',
                         fileName: `${safeTitle}.mp4`,
                         caption: captionText
                     }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
-                } else {
-                    try {
-                        await sock.sendMessage(chatId, {
-                            video: { url: filePath },
-                            mimetype: 'video/mp4',
-                            fileName: `${safeTitle}.mp4`,
-                            caption: captionText
-                        }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
-                    } catch (sendErr) {
-                        console.log('[VIDEO] Direct video send failed, falling back to document:', sendErr.message);
-                        await sock.sendMessage(chatId, {
-                            document: { url: filePath },
-                            mimetype: 'video/mp4',
-                            fileName: `${safeTitle}.mp4`,
-                            caption: captionText
-                        }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
-                    }
-                }
-                console.log(`[VIDEO] Successfully sent video (${fileSizeMb} MB) via yt-dlp!`);
-                return; // Successfully completed!
-            } finally {
-                try {
-                    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-                } catch (cleanErr) {}
-            }
-        }
-
-        // 2. Fallback to web APIs if yt-dlp was unable to process
-        let videoData;
-        let downloadSuccess = false;
-        
-        // List of API methods to try
-        const apiMethods = [
-            { name: 'EliteProTech', method: () => getEliteProTechVideoByUrl(videoUrl) },
-            { name: 'Yupra', method: () => getYupraVideoByUrl(videoUrl) },
-            { name: 'Okatsu', method: () => getOkatsuVideoByUrl(videoUrl) }
-        ];
-        
-        // Try each API until we successfully get video data
-        for (const apiMethod of apiMethods) {
-            try {
-                videoData = await apiMethod.method();
-                const videoUrl_check = videoData.download || videoData.dl || videoData.url;
-                
-                if (!videoUrl_check) {
-                    console.log(`${apiMethod.name} returned no download URL, trying next API...`);
-                    continue; // Try next API
-                }
-                
-                downloadSuccess = true;
-                break; // Success! Exit the loop
-            } catch (apiErr) {
-                console.log(`${apiMethod.name} API failed:`, apiErr.message);
-                continue;
-            }
-        }
-        
-        // If all APIs failed, throw error
-        if (!downloadSuccess || !videoData) {
-            throw new Error('All download sources failed. The content may be unavailable or blocked.');
-        }
-
-        const rawDownloadUrl = videoData.download || videoData.dl || videoData.url;
-        const fallbackTitle = (videoData.title || videoTitle || safeTitle || 'video').replace(/[^\w\s-]/g, '').trim() || 'video';
-        const tempFallbackPath = path.join(workspaceTemp, `webdl_${Date.now()}.mp4`);
-
-        try {
-            console.log('[VIDEO] Downloading stream from web API to disk...');
-            const dlResult = await downloadRemoteUrlToDisk(rawDownloadUrl, tempFallbackPath);
-            const fileSizeMb = Math.round((dlResult.sizeBytes || 0) / (1024 * 1024));
-
-            const captionText = `🎬 *${videoData.title || videoTitle || 'Video'}*\n` +
-                (fileSizeMb > 0 ? `📦 Size: *${fileSizeMb} MB*\n` : '') +
-                `\n> *_Downloaded by X-Bot_*`;
-
-            // Stream directly from disk to WhatsApp
-            // Videos > 40MB are sent as WhatsApp document (up to 2GB supported)
-            if (fileSizeMb > 40) {
-                console.log(`[VIDEO] Video is ${fileSizeMb} MB (>40MB). Sending as WhatsApp Document...`);
-                await sock.sendMessage(chatId, {
-                    document: { url: tempFallbackPath },
-                    mimetype: 'video/mp4',
-                    fileName: `${fallbackTitle}.mp4`,
-                    caption: captionText
-                }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
-            } else {
-                try {
-                    await sock.sendMessage(chatId, {
-                        video: { url: tempFallbackPath },
-                        mimetype: 'video/mp4',
-                        fileName: `${fallbackTitle}.mp4`,
-                        caption: captionText
-                    }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
-                } catch (sendVideoErr) {
-                    console.log('[VIDEO] Direct video send failed, falling back to document:', sendVideoErr.message);
-                    await sock.sendMessage(chatId, {
-                        document: { url: tempFallbackPath },
-                        mimetype: 'video/mp4',
-                        fileName: `${fallbackTitle}.mp4`,
-                        caption: captionText
-                    }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
                 }
             }
+            console.log(`[VIDEO] Successfully sent video (${fileSizeMb} MB) via yt-dlp!`);
         } finally {
             try {
-                if (fs.existsSync(tempFallbackPath)) fs.unlinkSync(tempFallbackPath);
+                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             } catch (cleanErr) {}
         }
-
 
     } catch (error) {
         console.error('[VIDEO] Command Error:', error?.message || error);
         
-        // Provide more specific error messages
         let errorMessage = '❌ Failed to download video.';
-        if (error.message && error.message.includes('blocked')) {
-            errorMessage = '❌ Download blocked. The content may be unavailable in your region or due to legal restrictions.';
-        } else if (error.response?.status === 451 || error.status === 451) {
-            errorMessage = '❌ Content unavailable (451). This may be due to legal restrictions or regional blocking.';
-        } else if (error.message && error.message.includes('All download sources failed')) {
-            errorMessage = '❌ All download sources failed. The content may be unavailable or blocked.';
-        } else if (error.message) {
-            errorMessage = '❌ Download failed: ' + error.message;
+        const msg = error.message || '';
+        if (msg.includes('Sign in to confirm you’re not a bot') || msg.includes('bot confirmation')) {
+            errorMessage = '⚠️ YouTube requires authentication. Please upload cookies.txt via the Bot Dashboard or export cookies from a dummy account.';
+        } else if (msg.includes('blocked') || msg.includes('451')) {
+            errorMessage = '❌ Download blocked by YouTube. Content unavailable in region.';
+        } else if (msg.includes('Media upload failed')) {
+            errorMessage = '❌ WhatsApp media upload server failed to receive the file. Please retry.';
+        } else if (msg) {
+            // Include first 150 chars of yt-dlp message for clarity
+            errorMessage = '❌ yt-dlp Error: ' + msg.slice(0, 150);
         }
         
         await sock.sendMessage(chatId, { 
