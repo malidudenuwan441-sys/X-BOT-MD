@@ -1,8 +1,8 @@
-const yts = require('yt-search');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const net = require('net');
+const { getYtDlpPath, recoverYoutubeUrl } = require('../lib/ytdlp_helper');
 
 // Ensure temp directory exists in workspace
 const workspaceTemp = path.join(process.cwd(), 'temp');
@@ -60,14 +60,15 @@ async function downloadAudioViaYtDlp(youtubeUrl) {
 
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const outTemplate = path.join(workspaceTemp, `ytsong_${id}.%(ext)s`);
-    const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+    const ytdlpBin = getYtDlpPath();
     const nodeBin = process.execPath || 'node';
     const cookieArg = hasValidCookies ? `--cookies "${cookiesPath}"` : '';
 
     const executeDownload = (cmd) => {
         return new Promise((resolve, reject) => {
             console.log(`[SONG] Executing: ${cmd}`);
-            exec(cmd, { timeout: 600000 }, (error, stdout, stderr) => {
+            // Use 50MB maxBuffer and --no-progress to avoid buffer overflow kill
+            exec(cmd, { timeout: 600000, maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
                 if (error) {
                     return reject(new Error(stderr || stdout || error.message));
                 }
@@ -91,51 +92,52 @@ async function downloadAudioViaYtDlp(youtubeUrl) {
     };
 
     const ipv6Flag = useIPv6 ? '-6' : '';
-    const primaryCmd = `${ytdlpBin} ${ipv6Flag} ${cookieArg} --js-runtimes "node:${nodeBin}" --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
+    const primaryCmd = `${ytdlpBin} ${ipv6Flag} ${cookieArg} --js-runtimes "node:${nodeBin}" --no-progress --no-playlist -x --audio-format mp3 --audio-quality 128K -o "${outTemplate}" "${youtubeUrl}"`;
 
     try {
         return await executeDownload(primaryCmd);
     } catch (primaryErr) {
         console.warn('[SONG] Primary yt-dlp attempt failed:', primaryErr.message);
-        const fallbackCmd = `${ytdlpBin} ${cookieArg} --no-playlist -x --audio-format mp3 -o "${outTemplate}" "${youtubeUrl}"`;
+        const fallbackCmd = `${ytdlpBin} ${cookieArg} --no-progress --no-playlist -x --audio-format mp3 --audio-quality 128K -o "${outTemplate}" "${youtubeUrl}"`;
         console.log('[SONG] Retrying yt-dlp with standard fallback configuration...');
         return await executeDownload(fallbackCmd);
     }
 }
 
-async function songCommand(sock, chatId, message) {
+async function songCommand(sock, chatId, message, rawText) {
     try {
-        const text = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
-        const query = text.split(' ').slice(1).join(' ').trim();
+        const text = rawText ||
+            message.message?.conversation ||
+            message.message?.extendedTextMessage?.text ||
+            message.message?.imageMessage?.caption ||
+            message.message?.videoMessage?.caption || '';
+            
+        const query = text.replace(/^\.\w+\s*/i, '').trim();
         if (!query) {
-            await sock.sendMessage(chatId, { text: 'Usage: .song <song name or YouTube link>' }, { quoted: message });
+            await sock.sendMessage(chatId, { text: 'Usage: `.song <song name or YouTube link>`' }, { quoted: message });
             return;
         }
 
-        let video;
-        if (query.startsWith('http://') || query.startsWith('https://')) {
-            video = { url: query, title: 'YouTube Audio', thumbnail: undefined };
-        } else {
-            const search = await yts(query);
-            if (!search || !search.videos || search.videos.length === 0) {
-                await sock.sendMessage(chatId, { text: 'No results found.' }, { quoted: message });
-                return;
-            }
-            video = search.videos[0];
-        }
+        // Recover YouTube metadata and restore genuine case-sensitive video ID if needed
+        const ytInfo = await recoverYoutubeUrl(query);
+        const videoUrl = ytInfo.url || query;
+        const videoTitle = ytInfo.title || query;
+        const videoThumbnail = ytInfo.thumbnail;
 
-        // Inform user
-        const captionTitle = video.title || query;
-        if (video.thumbnail) {
-            await sock.sendMessage(chatId, {
-                image: { url: video.thumbnail },
-                caption: `🎵 *${captionTitle}*\nDownloading audio via yt-dlp...`
-            }, { quoted: message });
+        // Inform user with thumbnail
+        const captionTitle = videoTitle || query;
+        if (videoThumbnail) {
+            try {
+                await sock.sendMessage(chatId, {
+                    image: { url: videoThumbnail },
+                    caption: `🎵 *${captionTitle}*\n⏳ Downloading audio via yt-dlp...`
+                }, { quoted: message });
+            } catch (e) {}
         }
 
         // Pure yt-dlp audio download
-        console.log('[SONG] Attempting audio download strictly with yt-dlp...');
-        const ytdlpSong = await downloadAudioViaYtDlp(video.url);
+        console.log('[SONG] Attempting audio download strictly with yt-dlp for:', videoUrl);
+        const ytdlpSong = await downloadAudioViaYtDlp(videoUrl);
         if (!ytdlpSong || !ytdlpSong.filePath) {
             throw new Error('yt-dlp could not produce an audio file.');
         }
@@ -143,7 +145,7 @@ async function songCommand(sock, chatId, message) {
         const filePath = ytdlpSong.filePath;
         try {
             const fileSizeMb = Math.round((ytdlpSong.sizeBytes || 0) / (1024 * 1024));
-            const safeTitle = (video.title || query || 'song').replace(/[^\w\s-]/g, '').trim() || 'song';
+            const safeTitle = (videoTitle || query || 'song').replace(/[^\w\s-]/g, '').trim() || 'song';
             
             if (fileSizeMb > 50) {
                 // Send as document for large DJ mixes/podcasts
@@ -151,7 +153,7 @@ async function songCommand(sock, chatId, message) {
                     document: { url: filePath },
                     mimetype: 'audio/mpeg',
                     fileName: `${safeTitle}.mp3`,
-                    caption: `🎵 *${video.title || 'Audio'}*\n📦 Size: *${fileSizeMb} MB*\n\n> *_Downloaded by X-Bot_*`
+                    caption: `🎵 *${videoTitle || 'Audio'}*\n📦 Size: *${fileSizeMb} MB*\n\n> *_Downloaded by X-Bot_*`
                 }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
             } else {
                 await sock.sendMessage(chatId, {
@@ -160,12 +162,12 @@ async function songCommand(sock, chatId, message) {
                     fileName: `${safeTitle}.mp3`,
                     contextInfo: {
                         externalAdReply: {
-                            title: video.title || safeTitle,
-                            body: video.author?.name || 'X-Bot Music',
-                            thumbnailUrl: video.thumbnail,
+                            title: videoTitle || safeTitle,
+                            body: 'X-Bot Music',
+                            thumbnailUrl: videoThumbnail,
                             mediaType: 2,
-                            mediaUrl: video.url,
-                            sourceUrl: video.url
+                            mediaUrl: videoUrl,
+                            sourceUrl: videoUrl
                         }
                     }
                 }, { quoted: message, mediaUploadTimeoutMs: 1800000 });
@@ -179,15 +181,17 @@ async function songCommand(sock, chatId, message) {
         console.error('[SONG] Command Error:', err);
         
         let errorMessage = '❌ Failed to download song.';
-        const msg = err.message || '';
+        const msg = err?.message || '';
         if (msg.includes('Sign in to confirm you’re not a bot') || msg.includes('bot confirmation')) {
-            errorMessage = '⚠️ YouTube requires authentication. Please upload cookies.txt via the Bot Dashboard or export cookies from a dummy account.';
+            errorMessage = '⚠️ YouTube requires authentication. Please export cookies.txt from your browser and paste it in the Bot Dashboard.';
+        } else if (msg.includes('terminated') || msg.includes('Media upload failed')) {
+            errorMessage = '❌ WhatsApp media upload server terminated the connection. File may be too large or network interrupted.';
+        } else if (msg.includes('This video is unavailable')) {
+            errorMessage = '❌ YouTube reported: This video is unavailable.';
         } else if (msg.includes('blocked') || msg.includes('451')) {
             errorMessage = '❌ Download blocked by YouTube. Content unavailable in region.';
-        } else if (msg.includes('Media upload failed')) {
-            errorMessage = '❌ WhatsApp media upload server failed to receive the file. Please retry.';
         } else if (msg) {
-            errorMessage = '❌ yt-dlp Error: ' + msg.slice(0, 150);
+            errorMessage = '❌ yt-dlp Error: ' + msg.slice(0, 160);
         }
         
         await sock.sendMessage(chatId, { 
